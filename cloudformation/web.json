@@ -1,0 +1,621 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Web Cluster",
+    "Parameters": {
+        "ArtifactBucket": {
+            "Type": "String",
+            "Description": "S3 Bucket for Artifacts"
+        },
+        "MessageTopic": {
+            "Type": "String",
+            "Description": "Queue Topic ARN for Message Bus"
+        },
+        "SSHKeyName": {
+            "Type": "String",
+            "Description": "Instance SSH Key"
+        },
+        "VPCID": {
+            "Type": "String",
+            "Description": "VPC-ID"
+        },
+        "Environment": {
+            "Default": "Development",
+            "Type": "String",
+            "AllowedValues": [
+                "Production",
+                "Staging",
+                "Development"
+            ],
+            "Description": "Name of Environment",
+            "ConstraintDescription": "Production or Staging or Development"
+        },
+        "WebInstanceSize": {
+            "Default": "t1.micro",
+            "Type": "String",
+            "Description": "Instance Class",
+            "AllowedValues": [
+                "t1.micro",
+                "m1.small",
+                "m1.medium",
+                "m1.large",
+                "m1.xlarge",
+                "m3.medium",
+                "m3.large",
+                "m3.xlarge",
+                "m3.2xlarge",
+                "c1.medium",
+                "c1.xlarge",
+                "c3.large",
+                "c3.xlarge",
+                "c3.2xlarge",
+                "c3.4xlarge",
+                "c3.8xlarge",
+                "cc2.8xlarge",
+                "m2.xlarge",
+                "m2.2xlarge",
+                "m2.4xlarge",
+                "cr1.8xlarge"
+            ],
+            "ConstraintDescription": "must select a valid instance type."
+        },
+        "WebASGMin": {
+            "Default": "4",
+            "Type": "String",
+            "Description": "AutoScale Min"
+        },
+        "WebASGMax": {
+            "Default": "20",
+            "Type": "String",
+            "Description": "AutoScale Max"
+        },
+        "WebASGDesired": {
+            "Default": "4",
+            "Type": "String",
+            "Description": "AutoScale Desired"
+        },
+        "WebAMI": {
+            "Type": "String",
+            "Description": "AMI ID"
+        },
+        "ELBSubnets": {
+            "Default": "",
+            "Type": "CommaDelimitedList",
+            "Description": "ELBSubnets"
+        },
+        "SemiPrivateSubnets": {
+            "Default": "",
+            "Type": "CommaDelimitedList",
+            "Description": "Subnets"
+        },
+        "ChefClientVersion": {
+            "Type": "String",
+            "Description": "11.12.2"
+        }
+    },
+    "Mappings": {
+        "AWSRegionAvailabilityZones": {
+            "us-east-1": {
+                "1": "us-east-1a",
+                "2": "us-east-1d",
+                "3": "us-east-1c"
+            },
+            "us-west-1": {
+                "1": "us-west-1a",
+                "2": "us-west-1b",
+                "3": "us-west-1c"
+            },
+            "us-west-2": {
+                "1": "us-west-2a",
+                "2": "us-west-2b",
+                "3": "us-west-2c"
+            }
+        }
+    },
+    "Resources": {
+        "WebSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "VpcId": {
+                    "Ref": "VPCID"
+                },
+                "GroupDescription": "Web Security Group",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "icmp",
+                        "FromPort": "-1",
+                        "ToPort": "-1",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "10.0.0.0/8"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "10.10.0.0/24"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "10.0.0.0/8"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "10.10.0.0/24"
+                    }
+                ]
+            }
+        },
+        "ELBSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "VpcId": {
+                    "Ref": "VPCID"
+                },
+                "GroupDescription": "ELB Security Group",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "icmp",
+                        "FromPort": "-1",
+                        "ToPort": "-1",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "443",
+                        "ToPort": "443",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "WebELB": {
+            "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+            "Properties": {
+                "Subnets": {
+                    "Ref": "ELBSubnets"
+                },
+                "SecurityGroups": [
+                    {
+                        "Ref": "ELBSecurityGroup"
+                    }
+                ],
+                "Listeners": [
+                    {
+                        "LoadBalancerPort": "80",
+                        "InstancePort": "80",
+                        "Protocol": "HTTP"
+                    }
+                ],
+                "HealthCheck": {
+                    "Target": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "HTTP:80/heartbeat"
+                            ]
+                        ]
+                    },
+                    "HealthyThreshold": "2",
+                    "UnhealthyThreshold": "2",
+                    "Interval": "30",
+                    "Timeout": "5"
+                }
+            }
+        },
+        "WebASGServerGroup": {
+            "UpdatePolicy": {
+                "AutoScalingRollingUpdate": {
+                    "MinInstancesInService": {
+                        "Ref": "WebASGMin"
+                    },
+                    "MaxBatchSize": "1",
+                    "PauseTime": "PT240S"
+                }
+            },
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "Properties": {
+                "AvailabilityZones": [
+                    {
+                        "Fn::FindInMap": [
+                            "AWSRegionAvailabilityZones",
+                            {
+                                "Ref": "AWS::Region"
+                            },
+                            "1"
+                        ]
+                    },
+                    {
+                        "Fn::FindInMap": [
+                            "AWSRegionAvailabilityZones",
+                            {
+                                "Ref": "AWS::Region"
+                            },
+                            "2"
+                        ]
+                    },
+                    {
+                        "Fn::FindInMap": [
+                            "AWSRegionAvailabilityZones",
+                            {
+                                "Ref": "AWS::Region"
+                            },
+                            "3"
+                        ]
+                    }
+                ],
+                "VPCZoneIdentifier": {
+                    "Ref": "SemiPrivateSubnets"
+                },
+                "LaunchConfigurationName": {
+                    "Ref": "WebLaunchConfig"
+                },
+                "LoadBalancerNames": [
+                    {
+                        "Ref": "WebELB"
+                    }
+                ],
+                "MinSize": {
+                    "Ref": "WebASGMin"
+                },
+                "MaxSize": {
+                    "Ref": "WebASGMax"
+                },
+                "DesiredCapacity": {
+                    "Ref": "WebASGDesired"
+                },
+                "NotificationConfiguration": {
+                    "TopicARN": {
+                        "Ref": "MessageTopic"
+                    },
+                    "NotificationTypes": [
+                        "autoscaling:EC2_INSTANCE_LAUNCH",
+                        "autoscaling:EC2_INSTANCE_LAUNCH_ERROR",
+                        "autoscaling:EC2_INSTANCE_TERMINATE",
+                        "autoscaling:EC2_INSTANCE_TERMINATE_ERROR"
+                    ]
+                },
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": {
+                            "Fn::Join": [
+                                "-",
+                                [
+                                    {
+                                        "Ref": "Environment"
+                                    },
+                                    "Web"
+                                ]
+                            ]
+                        },
+                        "PropagateAtLaunch": true
+                    }
+                ]
+            }
+        },
+        "WebAlarmStatusCheckFailed": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Status Check Failed",
+                "MetricName": "StatusCheckFailed",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Maximum",
+                "Period": "300",
+                "EvaluationPeriods": "2",
+                "Threshold": "1",
+                "AlarmActions": [
+                    {
+                        "Ref": "MessageTopic"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "WebASGServerGroup"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanOrEqualToThreshold"
+            }
+        },
+        "WebScaleUpPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "ChangeInCapacity",
+                "AutoScalingGroupName": {
+                    "Ref": "WebASGServerGroup"
+                },
+                "Cooldown": "240",
+                "ScalingAdjustment": "2"
+            }
+        },
+        "WebScaleDownPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "ChangeInCapacity",
+                "AutoScalingGroupName": {
+                    "Ref": "WebASGServerGroup"
+                },
+                "Cooldown": "120",
+                "ScalingAdjustment": "-1"
+            }
+        },
+        "WebCPUAlarmHigh": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale-up if CPU > 90% for 10 minutes",
+                "MetricName": "CPUUtilization",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Maximum",
+                "Period": "60",
+                "EvaluationPeriods": "1",
+                "Threshold": "50",
+                "AlarmActions": [
+                    {
+                        "Ref": "WebScaleUpPolicy"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "WebASGServerGroup"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanThreshold"
+            }
+        },
+        "WebCPUAlarmLow": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale-down if CPU < 70% for 10 minutes",
+                "MetricName": "CPUUtilization",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Average",
+                "Period": "300",
+                "EvaluationPeriods": "2",
+                "Threshold": "30",
+                "AlarmActions": [
+                    {
+                        "Ref": "WebScaleDownPolicy"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "WebASGServerGroup"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "LessThanThreshold"
+            }
+        },
+        "WebPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "Roles": [
+                    {
+                        "Ref": "WebRole"
+                    }
+                ],
+                "PolicyName": "WebPolicy",
+                "PolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "cloudformation:DescribeStackResource",
+                            "Resource": "*"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "ec2:Describe*",
+                                "ec2:CreateSnapshot",
+                                "ec2:CreateTags",
+                                "sqs:SendMessage",
+                                "ec2:DeleteSnapshot",
+                                "cloudwatch:PutMetricData"
+                            ],
+                            "Resource": "*"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:Get*",
+                                "s3:List*"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            }
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "WebRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/"
+            }
+        },
+        "WebProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "WebRole"
+                    }
+                ]
+            }
+        },
+        "WebLaunchConfig": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "Metadata": {
+                "AWS::CloudFormation::Authentication": {
+                    "S3AccessCreds": {
+                        "type": "S3",
+                        "roleName": {
+                            "Ref": "WebRole"
+                        }
+                    }
+                },
+                "AWS::CloudFormation::Init": {
+                    "config": {
+                        "files": {
+                            "/etc/chef/chef-validator.pem": {
+                                "source": {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "https://s3.amazonaws.com/",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/chef/chef-validator.pem"
+                                        ]
+                                    ]
+                                },
+                                "mode": "000644",
+                                "owner": "root",
+                                "group": "root",
+                                "authentication": "S3AccessCreds"
+                            },
+                            "/etc/chef/client.rb": {
+                                "source": {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "https://s3.amazonaws.com/",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/chef/client.rb"
+                                        ]
+                                    ]
+                                },
+                                "mode": "000644",
+                                "owner": "root",
+                                "group": "root",
+                                "authentication": "S3AccessCreds"
+                            },
+                            "/etc/chef/init.json": {
+                                "mode": "000600",
+                                "owner": "root",
+                                "group": "root",
+                                "content": {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "{\"run_list\":[\"role[web]\"], \"environment\":\"", { "Ref": "Environment" }, "\"}"
+                                        ]
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Properties": {
+            	"AssociatePublicIpAddress": "true",
+                "KeyName": { "Ref": "SSHKeyName" },
+                "IamInstanceProfile": {
+                    "Fn::GetAtt": [
+                        "WebProfile",
+                        "Arn"
+                    ]
+                },
+                "ImageId": {
+                    "Ref": "WebAMI"
+                },
+                "SecurityGroups": [
+                    {
+                        "Ref": "WebSecurityGroup"
+                    }
+                ],
+                "InstanceType": {
+                    "Ref": "WebInstanceSize"
+                },
+                "InstanceMonitoring": "false",
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "#!/bin/bash\n",
+                                "rm -f /etc/update-motd.d/70-available-updates\n",
+                                "yum install -y git aws-cfn-bootstrap aws-apitools-common aws-apitools-ec2 python-pip ruby19 openssl-devel\n",
+                                "wget https://bitbucket.org/pypa/setuptools/raw/bootstrap/ez_setup.py -O - | python\n",
+                                "/opt/aws/bin/cfn-init -s ", { "Ref": "AWS::StackName" }, " -r WebLaunchConfig --region ", { "Ref": "AWS::Region" }, "\n",
+                                "curl -L https://www.opscode.com/chef/install.sh | bash -s -- -v ", { "Ref": "ChefClientVersion" }, "\n",
+                                "OPSCODE_USER=`hostname` chef-client -E ", { "Ref": "Environment" }, " -j /etc/chef/init.json >> /var/log/chef-client.log\n"
+                            ]
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "SecurityGroup": {
+            "Value": {
+                "Ref": "WebSecurityGroup"
+            },
+            "Description": "Web Security Group"
+        }
+    }
+}

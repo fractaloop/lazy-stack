@@ -1,0 +1,78 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Global Resources",
+    "Parameters": {
+        "ArtifactBucket": {
+            "Default": "",
+            "Type": "String",
+            "Description": "S3 Bucket for Artifacts"
+        },
+        "Environment": {
+            "Default": "Development",
+            "Type": "String",
+            "AllowedValues": [
+                "Production",
+                "Staging",
+                "Development"
+            ],
+            "Description": "Name of Environment",
+            "ConstraintDescription": "Production or Staging or Development"
+        }
+    },
+    "Resources": {
+        "MessageQueue": {
+            "Type": "AWS::SQS::Queue"
+        },
+        "MessageTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "Subscription": [
+                    {
+                        "Endpoint": {
+                            "Fn::GetAtt": [
+                                "MessageQueue",
+                                "Arn"
+                            ]
+                        },
+                        "Protocol": "sqs"
+                    }
+                ]
+            }
+        },
+        "SQSPolicy": {
+            "Type": "AWS::SQS::QueuePolicy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Id": "QueuePolicy",
+                    "Statement": [
+                        {
+                            "Sid": "Allow-SendMessage-To-Both-Queues-From-SNS-Topic",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": "*"
+                            },
+                            "Action": [
+                                "sqs:SendMessage"
+                            ],
+                            "Resource": "*",
+                            "Condition": {
+                                "ArnEquals": {
+                                    "aws:SourceArn": { "Ref": "MessageTopic" }
+                                }
+                            }
+                        }
+                    ]
+                },
+                "Queues": [
+                    { "Ref": "MessageQueue" }
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "MessageTopic": {
+            "Value": { "Ref": "MessageTopic" },
+            "Description": "Topic for Message Bus"
+        }
+    }
+}

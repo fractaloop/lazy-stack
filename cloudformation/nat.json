@@ -1,0 +1,407 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "NAT/VPN Box",
+    "Parameters": {
+        "ArtifactBucket": {
+            "Type": "String",
+            "Description": "S3 Bucket for Artifacts"
+        },
+        "MessageTopic": {
+            "Type": "String",
+            "Description": "Queue Topic ARN for Message Bus"
+        },
+        "VPCID": {
+            "Type": "String",
+            "Description": "VPC-ID"
+        },
+        "PublicSubnet": {
+            "Type": "String",
+            "Description": "Public SubnetID"
+        },
+        "ChefClientVersion": {
+            "Type": "String",
+            "Description": "11.10.4"
+        },
+        "Environment": {
+            "Default": "Development",
+            "Type": "String",
+            "AllowedValues": [
+                "Production",
+                "Staging",
+                "Development"
+            ],
+            "Description": "Name of Environment",
+            "ConstraintDescription": "Production or Staging or Development"
+        },
+        "NATInstanceSize": {
+            "Default": "t1.micro",
+            "Type": "String",
+            "Description": "Instance Class",
+            "AllowedValues": [
+                "t1.micro",
+                "m1.small",
+                "m1.medium",
+                "m1.large",
+                "m1.xlarge",
+                "m3.medium",
+                "m3.large",
+                "m3.xlarge",
+                "m3.2xlarge",
+                "c1.medium",
+                "c1.xlarge",
+                "c3.large",
+                "c3.xlarge",
+                "c3.2xlarge",
+                "c3.4xlarge",
+                "c3.8xlarge",
+                "cc2.8xlarge",
+                "m2.xlarge",
+                "m2.2xlarge",
+                "m2.4xlarge",
+                "cr1.8xlarge"
+            ],
+            "ConstraintDescription": "must select a valid instance type."
+        }
+    },
+    "Mappings": {
+        "AWSRegionArch2AMINAT": {
+            "us-east-1": {
+                "64": "ami-ad227cc4"
+            },
+            "us-west-1": {
+                "64": "ami-d69aad93"
+            },
+            "us-west-2": {
+                "64": "ami-f032acc0"
+            }
+        }
+    },
+    "Resources": {
+        "NATRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "NATPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "DependsOn": "NATRole",
+            "Properties": {
+                "Roles": [
+                    {
+                        "Ref": "NATRole"
+                    }
+                ],
+                "PolicyName": "NATPolicy",
+                "PolicyDocument": {
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "cloudformation:DescribeStackResource",
+                                "cloudwatch:PutMetricData"
+                            ],
+                            "Resource": "*"
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:Get*",
+                                "s3:List*"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            }
+                                        ]
+                                    ]
+                                },
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:*"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/openvpn/*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "NATProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "DependsOn": "NATRole",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "NATRole"
+                    }
+                ]
+            }
+        },
+        "NATIPAddress": {
+            "Type": "AWS::EC2::EIP",
+            "Properties": {
+                "Domain": "vpc",
+                "InstanceId": {
+                    "Ref": "NATDevice"
+                }
+            }
+        },
+        "NATSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Enable internal access to the NAT device",
+                "VpcId": {
+                    "Ref": "VPCID"
+                },
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "0",
+                        "ToPort": "65535",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "udp",
+                        "FromPort": "0",
+                        "ToPort": "65535",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "icmp",
+                        "FromPort": "-1",
+                        "ToPort": "-1",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ],
+                "SecurityGroupEgress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "0",
+                        "ToPort": "65535",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "udp",
+                        "FromPort": "0",
+                        "ToPort": "65535",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "icmp",
+                        "FromPort": "-1",
+                        "ToPort": "-1",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "NATDevice": {
+            "Type": "AWS::EC2::Instance",
+            "DependsOn": "NATProfile",
+            "Metadata": {
+                "AWS::CloudFormation::Authentication": {
+                    "S3AccessCreds": {
+                        "type": "S3",
+                        "roleName": {
+                            "Ref": "NATRole"
+                        }
+                    }
+                },
+                "AWS::CloudFormation::Init": {
+                    "config": {
+                        "files": {
+                            "/etc/chef/chef-validator.pem": {
+                                "source": {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "https://s3.amazonaws.com/",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/chef/chef-validator.pem"
+                                        ]
+                                    ]
+                                },
+                                "mode": "000644",
+                                "owner": "root",
+                                "group": "root",
+                                "authentication": "S3AccessCreds"
+                            },
+                            "/etc/chef/client.rb": {
+                                "source": {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "https://s3.amazonaws.com/",
+                                            {
+                                                "Ref": "ArtifactBucket"
+                                            },
+                                            "/chef/client.rb"
+                                        ]
+                                    ]
+                                },
+                                "mode": "000644",
+                                "owner": "root",
+                                "group": "root",
+                                "authentication": "S3AccessCreds"
+                            },
+                            "/etc/chef/init.json": {
+                                "mode": "000600",
+                                "owner": "root",
+                                "group": "root",
+                                "content": {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "{\"run_list\":[\"role[vpn]\"],\"aws\":{\"services\":{\"sns\":{\"alert-topic\":\"",
+                                            {
+                                                "Ref": "MessageTopic"
+                                            },
+                                            "\"}}}"
+                                        ]
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Properties": {
+                "InstanceType": {
+                    "Ref": "NATInstanceSize"
+                },
+                "IamInstanceProfile": {
+                    "Ref": "NATProfile"
+                },
+                "KeyName": "infrastructure",
+                "SubnetId": { "Ref": "PublicSubnet" },
+                "SourceDestCheck": "false",
+                "ImageId": {
+                    "Fn::FindInMap": [
+                        "AWSRegionArch2AMINAT",
+                        {
+                            "Ref": "AWS::Region"
+                        },
+                        "64"
+                    ]
+                },
+                "SecurityGroupIds": [
+                    {
+                        "Ref": "NATSecurityGroup"
+                    }
+                ],
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": {
+                            "Fn::Join": [
+                                "-",
+                                [
+                                    {
+                                        "Ref": "Environment"
+                                    },
+                                    "NATVPN"
+                                ]
+                            ]
+                        }
+                    },
+                    {
+                        "Key": "Environment",
+                        "Value": {
+                            "Ref": "Environment"
+                        }
+                    },
+                    {
+                        "Key": "Application",
+                        "Value": {
+                            "Ref": "AWS::StackName"
+                        }
+                    },
+                    {
+                        "Key": "Network",
+                        "Value": "Public"
+                    }
+                ],
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "#!/bin/bash\n",
+                                "rm -f /etc/update-motd.d/70-available-updates\n",
+                                "yum install -y git aws-cfn-bootstrap aws-apitools-common aws-apitools-ec2 python-pip\n",
+                                "pip install --upgrade setuptools\n",
+                                "/opt/aws/bin/cfn-init -s ", { "Ref": "AWS::StackName" }, " -r NATDevice --region ", { "Ref": "AWS::Region" }, "\n",
+                                "curl -L https://www.opscode.com/chef/install.sh | bash -s -- -v ", { "Ref": "ChefClientVersion" }, "\n",
+                                "OPSCODE_USER=`hostname` chef-client -E ", { "Ref": "Environment" }, " -j /etc/chef/init.json >> /var/log/chef-client.log\n"
+                            ]
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "NatID": {
+            "Value": {
+                "Ref": "NATDevice"
+            },
+            "Description": "Nat Instance ID"
+        },
+        "NatIP": {
+            "Value": {
+                "Ref": "NATIPAddress"
+            },
+            "Description": "Nat Public IP"
+        }
+    }
+}
