@@ -23,7 +23,7 @@
         },
         "ChefClientVersion": {
             "Type": "String",
-            "Description": "11.10.4"
+            "Description": "11.12.8"
         }
     },
     "Mappings": {
