@@ -10,6 +10,10 @@
             "Type": "String",
             "Description": "Queue Topic ARN for Message Bus"
         },
+        "SSHKeyName": {
+            "Type": "String",
+            "Description": "SSHKeyName"
+        },
         "Environment": {
             "Default": "Development",
             "Type": "String",
@@ -989,6 +993,9 @@
                     },
                     "ArtifactBucket": {
                         "Ref": "ArtifactBucket"
+                    },
+                    "SSHKeyName": {
+                        "Ref": "SSHKeyName"
                     },
                     "VPCID": {
                         "Ref": "VPC"
